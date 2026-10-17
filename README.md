@@ -63,7 +63,7 @@ Theos in `~/theos` and Xcode with an iPhoneOS 26+ SDK (`xcode-select` it). An SD
 alone builds too, but without the Live Activity. Then:
 
     brew install make ldid dpkg zsign libimobiledevice
-    uv tool install "cyan @ git+https://github.com/asdfzxcvbn/pyzule-rw"
+    uv tool install --force --with pillow "cyan @ git+https://github.com/asdfzxcvbn/pyzule-rw"
 
 Put the decrypted `.ipa` in `ipa/`, then:
 
