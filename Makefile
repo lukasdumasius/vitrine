@@ -10,7 +10,7 @@ FLEX_ARG := $(if $(filter 0,$(FLEX)),--no-flex,)
 # A local install is renamed and re-iconed so it is told apart from the released app on the home
 # screen.
 DEV_NAME ?= Muzika
-DEV_ICON ?= docs/icon.png
+DEV_ICON ?= icons/Muzika.png
 DEV_BUNDLE_ID ?= com.dev.muzika
 
 .PHONY: build release install quick trees session log flags

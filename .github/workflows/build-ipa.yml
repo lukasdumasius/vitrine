@@ -15,6 +15,14 @@ on:
         description: "Bundle identifier (leave empty to keep com.spotify.client)"
         default: com.dev.muzika
         type: string
+      app_icon:
+        description: "App icon on the home screen"
+        default: icons/Muzika.png
+        type: choice
+        options:
+          - icons/Muzika.png
+          - docs/icon.png
+          - none
       upload_method:
         description: "Where to put the result"
         default: artifacts
@@ -58,6 +66,7 @@ jobs:
           BUNDLE_ID="${{ inputs.bundle_id }}"
           ./scripts/pipeline.sh ipa/spotify.ipa --no-flex
           --name "${{ inputs.app_name }}"
+          ${{ inputs.app_icon != 'none' && format('--icon "{0}"', inputs.app_icon) || '' }}
 
       - uses: actions/upload-artifact@v5
         if: inputs.upload_method != 'filebin'
