@@ -11,6 +11,7 @@
 #import "SGRTokens.h"
 #import "SGRAccent.h"
 #import "SGRDownload.h"
+#import "Shared/AlbumQueue/AlbumQueue.h"
 
 // The capsule: the glyph is Spotify's own 48pt canvas with the triangle small in the middle of it, so the
 // lead is short and the gap to the word comes out of the canvas itself.
@@ -41,6 +42,18 @@ static NSString *wordIn(UIView *button) {
         if (!word && v.accessibilityLabel.length) word = v.accessibilityLabel;
     });
     return word;
+}
+
+// The capsule's word, made again only when the text size changes: the header feeds the capsule on every step of its collapse.
+static UIFont *capsuleFont(void) {
+    static UIFont *font;
+    static UIContentSizeCategory madeFor;
+    UIContentSizeCategory category = UIApplication.sharedApplication.preferredContentSizeCategory;
+    if (!font || ![category isEqualToString:madeFor]) {
+        font = SGRFont(UIFontTextStyleSubheadline, UIFontWeightSemibold, UIContentSizeCategoryLarge);
+        madeFor = category;
+    }
+    return font;
 }
 
 #pragma mark - the Play capsule
@@ -109,7 +122,7 @@ static NSString *wordIn(UIView *button) {
     CGSize size = source.bounds.size;
     UIImageView *glyph = glyphIn(source, MIN(size.width, size.height));
 
-    UIFont *font = SGRFont(UIFontTextStyleSubheadline, UIFontWeightSemibold, UIContentSizeCategoryLarge);
+    UIFont *font = capsuleFont();
     if (![_title.font isEqual:font]) _title.font = font;
     UIColor *content = self.contentColor ?: SGRAccent();
     if (![_title.textColor isEqual:content]) _title.textColor = content;
@@ -394,6 +407,7 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
 }
 
 - (void)sgr_tap {
+    if ([self.source.accessibilityIdentifier hasPrefix:SGAlbumQueueButtonPrefix]) SGAlbumQueueMarkSource(self.source);
     SGRActivate(self.source);
     // The word is watched where Spotify writes it, but a button that rebuilds its content on the state it
     // just took writes the new word into a label the watch has never seen. So a tap, and only a tap, asks
