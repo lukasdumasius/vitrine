@@ -90,7 +90,7 @@ static UIView *trackMarker(UIView *bar) {
     __block UIView *info = nil, *artwork = nil;
     SGForEachView(bar, ^(UIView *v) {
         if (info || inStrip(v, bar)) return;
-        if ([NSStringFromClass(v.class) containsString:@"InformationContainer"]) info = v;
+        if (SGClassNamed(v.class, @"InformationContainer")) info = v;
         CGSize size = v.bounds.size;
         BOOL square = size.width >= 36 && size.width <= 48 && fabs(size.width - size.height) < 1;
         if (!artwork && square && ![v isKindOfClass:UIControl.class]) artwork = v;
@@ -216,6 +216,8 @@ static void restoreEdges(UIView *bar) {
 }
 
 static BOOL setEdges(UIView *bar, CGFloat left, CGFloat right) {
+    // Edges already where they are asked for walk nothing: placeInline asks on every layout pass of the bar.
+    if (fabs(CGRectGetMinX(bar.frame) - left) < 0.25 && fabs(CGRectGetMaxX(bar.frame) - right) < 0.25) return YES;
     UIView *superview = bar.superview;
     if (bar.translatesAutoresizingMaskIntoConstraints) {
         CGRect frame = CGRectMake(left, bar.frame.origin.y, right - left, bar.frame.size.height);
@@ -243,7 +245,7 @@ static BOOL setEdges(UIView *bar, CGFloat left, CGFloat right) {
     if (held == 3) return YES;
     restoreEdges(bar);
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ SGLog(@"now playing bar: its edges are not held by its superview's constraints, so it stays above the tab bar"); });
+    dispatch_once(&once, ^{ SGLog(@"now playing bar: its edges are not held by its superview's constraints, so it keeps Spotify's"); });
     return NO;
 }
 
@@ -423,6 +425,11 @@ static void appendShape(UIView *view, NSUInteger depth, NSMutableString *out) {
     if (depth < 8) for (UIView *sub in view.subviews) appendShape(sub, depth + 1, out);
 }
 
+// The bar's edges set to `r`'s sides, `r` in the slot's coordinates and the view standing at `origin` in them.
+static BOOL edgesTo(UIView *bar, CGRect r, CGPoint origin) {
+    return !CGRectIsNull(r) && setEdges(bar, CGRectGetMinX(r) - origin.x, CGRectGetMaxX(r) - origin.x);
+}
+
 static void placeInline(UIViewController *container) {
     UIView *view = container.view;
     UIView *bar = container.childViewControllers.firstObject.viewIfLoaded;
@@ -443,11 +450,13 @@ static void placeInline(UIViewController *container) {
     CGRect slot = !bar || bar.superview != view || !known ? CGRectNull : SGRTabBarInlineSlot(view.superview, track.size.height);
     // Where the view stands untransformed, in the slot's coordinates.
     CGPoint origin = CGPointMake(view.center.x - view.bounds.size.width / 2, view.center.y - view.bounds.size.height / 2);
-    if (CGRectIsNull(slot) || !setEdges(bar, CGRectGetMinX(slot) - origin.x, CGRectGetMaxX(slot) - origin.x)) {
-        if (sg_inline) restoreEdges(bar);
+    if (!edgesTo(bar, slot, origin)) {
         if (sg_inline) tuckExtras(bar, NO);
         sg_inline = nil;
         if (!CGAffineTransformIsIdentity(view.transform)) view.transform = CGAffineTransformIdentity;
+        // Above the bar the card takes the glass row's edges (SGRTabBarGlassRow).
+        CGRect row = bar && bar.superview == view ? SGRTabBarGlassRow(view.superview) : CGRectNull;
+        if (!edgesTo(bar, row, origin)) restoreEdges(bar);
         if (bar) placeTexts(bar);
         return;
     }
@@ -523,7 +532,7 @@ void SGRNowPlayingBarMoving(BOOL moving) {
 // frame from those.
 static BOOL inSheet(UIView *view) {
     for (UIView *v = view.superview; v; v = v.superview) {
-        if ([v.accessibilityIdentifier isEqualToString:@"sheet-view"] || [NSStringFromClass(v.class) containsString:@"SheetImpl"]) return YES;
+        if ([v.accessibilityIdentifier isEqualToString:@"sheet-view"] || SGClassNamed(v.class, @"SheetImpl")) return YES;
     }
     return NO;
 }
@@ -689,7 +698,7 @@ static void styleNowPlayingBar(UIViewController *container) {
 - (void)viewDidLayoutSubviews {
     %orig;
     UIViewController *parent = ((UIViewController *)self).parentViewController;
-    if ([NSStringFromClass(parent.class) containsString:@"NowPlayingBarContainer"]) styleNowPlayingBar(parent);
+    if (SGClassNamed(parent.class, @"NowPlayingBarContainer")) styleNowPlayingBar(parent);
 }
 %end
 

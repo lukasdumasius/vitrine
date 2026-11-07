@@ -207,14 +207,20 @@ static void readFormat(AudioUnit unit) {
     // Spotify starts its output again after every pause; the format is logged when it is not the last one.
     // Spotify's thread and a format change's may both be here.
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
-    static NSString *logged;
-    NSString *text = [NSString stringWithFormat:@"music haptics: listening to Spotify's output at %@, from %@ Spotify hands it%@", formatText(format),
-                      formatText(client), takes ? @"" : [NSString stringWithFormat:@"; not a format the analyzer reads (status %d), nothing plays", (int)status]];
+    static AudioStreamBasicDescription lastFormat, lastClient;
+    static OSStatus lastStatus;
+    static BOOL seen;
     os_unfair_lock_lock(&lock);
-    BOOL changed = ![text isEqualToString:logged];
-    logged = text;
+    BOOL changed = !seen || status != lastStatus || memcmp(&format, &lastFormat, sizeof format) || memcmp(&client, &lastClient, sizeof client);
+    lastFormat = format;
+    lastClient = client;
+    lastStatus = status;
+    seen = YES;
     os_unfair_lock_unlock(&lock);
-    if (changed) SGLog(@"%@", text);
+    if (changed) {
+        SGLog(@"music haptics: listening to Spotify's output at %@, from %@ Spotify hands it%@", formatText(format), formatText(client),
+              takes ? @"" : [NSString stringWithFormat:@"; not a format the analyzer reads (status %d), nothing plays", (int)status]);
+    }
     if (!takes) {
         atomic_store(&sg_layout, 0);
         return;
@@ -258,6 +264,26 @@ static float strength(void) {
     return (float)loadDouble(&sg_strengthBits);
 }
 
+static BOOL handleEngineStopped(NSError *error) {
+    BOOL interrupted = (error && (error.code == CHHapticErrorCodeEngineNotRunning ||
+                                 error.code == CHHapticErrorCodeServerInterrupted));
+    BOOL signaled = atomic_exchange(&sg_engineStopped, false);
+    if (!interrupted && !signaled) return NO;
+    sg_engineRunning = NO;
+    sg_rumble = nil;
+    sg_rumbling = NO;
+    sg_quietSince = 0;
+    return YES;
+}
+
+static void stopRumble(NSTimeInterval at) {
+    sg_quietSince = 0;
+    if (handleEngineStopped(nil) || !sg_rumbling) return;
+    NSError *error = nil;
+    if (![sg_rumble stopAtTime:at error:&error]) handleEngineStopped(error);
+    sg_rumbling = NO;
+}
+
 static BOOL startEngine(void) {
     static BOOL supported, checked;
     static double retryAt;
@@ -286,11 +312,7 @@ static BOOL startEngine(void) {
             SGLog(@"music haptics: the engine was reset");
         };
     }
-    if (atomic_exchange(&sg_engineStopped, false)) {
-        sg_engineRunning = NO;
-        sg_rumble = nil;
-        sg_rumbling = NO;
-    }
+    handleEngineStopped(nil);
     if (sg_engineRunning) return YES;
     double now = hostSeconds(mach_absolute_time());
     if (now < retryAt) return NO;
@@ -305,9 +327,8 @@ static BOOL startEngine(void) {
 }
 
 static void stopEngine(void) {
-    [sg_rumble stopAtTime:CHHapticTimeImmediate error:nil];
+    stopRumble(CHHapticTimeImmediate);
     sg_rumble = nil;
-    sg_rumbling = NO;
     if (sg_engineRunning) [sg_engine stopWithCompletionHandler:nil];
     sg_engineRunning = NO;
 }
@@ -349,7 +370,7 @@ static void playTap(const SGMusicEvent *event) {
     if (!player || ![player startAtTime:at error:&error]) {
         static int logged;
         if (logged++ < 3) SGLog(@"music haptics: a tap did not play: %@", error);
-        if (error.code == CHHapticErrorCodeEngineNotRunning || error.code == CHHapticErrorCodeServerInterrupted) atomic_store(&sg_engineStopped, true);
+        handleEngineStopped(error);
         return;
     }
     sg_stats.taps++;
@@ -374,13 +395,10 @@ static void playPreview(BOOL rumbles) {
     NSError *error = nil;
     CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:events parameters:@[] error:&error];
     id<CHHapticPatternPlayer> player = pattern ? [sg_engine createPlayerWithPattern:pattern error:&error] : nil;
-    if (!player || ![player startAtTime:CHHapticTimeImmediate error:&error]) SGLog(@"music haptics: the preview did not play: %@", error);
-}
-
-static void stopRumble(NSTimeInterval at) {
-    if (!sg_rumbling) return;
-    [sg_rumble stopAtTime:at error:nil];
-    sg_rumbling = NO;
+    if (!player || ![player startAtTime:CHHapticTimeImmediate error:&error]) {
+        SGLog(@"music haptics: the preview did not play: %@", error);
+        handleEngineStopped(error);
+    }
 }
 
 static void playLevel(const SGMusicEvent *event) {
@@ -414,6 +432,7 @@ static void playLevel(const SGMusicEvent *event) {
         if (!sg_rumble) {
             static int logged;
             if (logged++ < 3) SGLog(@"music haptics: no rumble: %@", error);
+            handleEngineStopped(error);
             return;
         }
     }
@@ -426,12 +445,13 @@ static void playLevel(const SGMusicEvent *event) {
         if (![sg_rumble startAtTime:at error:&error]) {
             static int logged;
             if (logged++ < 3) SGLog(@"music haptics: the rumble did not start: %@", error);
+            handleEngineStopped(error);
             sg_rumble = nil;
             return;
         }
         sg_rumbling = YES;
     } else {
-        [sg_rumble sendParameters:controls atTime:at error:nil];
+        if (![sg_rumble sendParameters:controls atTime:at error:&error]) handleEngineStopped(error);
     }
     sg_rumbleSentAt = heard;
     sg_rumbleSent = level;
@@ -484,7 +504,7 @@ static void *playerLoop(void *unused) {
             }
             unsigned head = atomic_load(&sg_head), tail = atomic_load(&sg_tail);
             if (tail != head && startEngine()) {
-                for (; tail != head; tail++) {
+                for (; tail != head && !handleEngineStopped(nil) && sg_engineRunning; tail++) {
                     SGMusicEvent event = sg_ring[tail & (kRingSize - 1)];
                     if (event.kind == SGMusicEventLevel) {
                         if (rumbles) playLevel(&event);
